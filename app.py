@@ -17,6 +17,27 @@ import os
 
 from queries import QUERIES, QUERY_MAP, CATEGORIES
 
+# ── DB Connection ─────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_connection():
+    """Create in-memory DuckDB and load data from Hugging Face parquet."""
+    con = duckdb.connect()  # 纯内存数据库，不需要文件
+    
+    with st.spinner("⏳ Loading data (~150MB, first load only)..."):
+        con.execute("""
+            CREATE TABLE taxi_trips AS
+            SELECT * FROM read_parquet(
+                'https://huggingface.co/datasets/Shyanne257/nyc-taxi-duckdb/resolve/main/taxi.duckdb'
+            )
+        """)
+        con.execute("""
+            CREATE TABLE taxi_zones AS
+            SELECT * FROM read_parquet(
+                'https://huggingface.co/datasets/Shyanne257/nyc-taxi-duckdb/resolve/main/taxi.duckdb'
+            )
+        """)
+    return con
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="NYC Taxi · DuckDB Internals Explorer",
