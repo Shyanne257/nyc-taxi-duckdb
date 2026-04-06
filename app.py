@@ -6,29 +6,6 @@ Run:
     streamlit run app.py
 """
 
-# ── DB Connection (cached) ────────────────────────────────────────────────────
-DB_PATH = "taxi.duckdb"
-HF_DATASET_URL = "https://huggingface.co/datasets/Shyanne257/nyc-taxi-duckdb/blob/main/taxi.duckdb"
-
-def download_db_if_needed():
-    """Download taxi.duckdb from Hugging Face if not present locally."""
-    if os.path.exists(DB_PATH):
-        return
-    st.info("⏳ First run: downloading database (~400 MB). This takes about 1–2 minutes...")
-    import urllib.request
-    with st.spinner("Downloading taxi.duckdb from Hugging Face..."):
-        urllib.request.urlretrieve(HF_DATASET_URL, DB_PATH)
-    st.success("✅ Download complete!")
-    st.rerun()
-
-@st.cache_resource
-def get_connection():
-    download_db_if_needed()
-    if not os.path.exists(DB_PATH):
-        st.error("Database file not found.")
-        st.stop()
-    return duckdb.connect(DB_PATH, read_only=True)
-
 import streamlit as st
 import duckdb
 import pandas as pd
