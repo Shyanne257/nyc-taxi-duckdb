@@ -1,12 +1,16 @@
 # NYC Taxi · DuckDB Internals Explorer
+
 ### DSCI 551 Course Project — Chenyu Zuo (USC ID: 2933-8178-16)
+
+🚀 **Live Demo**: https://nyc-taxi-duckdb.streamlit.app  
+📁 **GitHub**: https://github.com/Shyanne257/nyc-taxi-duckdb
 
 ---
 
 ## Project Overview
 
 This application is an analytical dashboard built on **DuckDB**, demonstrating how DuckDB's
-**vectorized execution engine** processes analytical queries over ~7 million NYC Yellow Taxi
+**vectorized execution engine** processes analytical queries over ~6.7 million NYC Yellow Taxi
 trips (January–February 2026).
 
 For every query, the dashboard shows:
@@ -16,45 +20,30 @@ For every query, the dashboard shows:
 
 ---
 
-## Setup Instructions
+## Setup Instructions (Local)
 
-### 1. Install Python dependencies
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Shyanne257/nyc-taxi-duckdb.git
+cd nyc-taxi-duckdb
+```
+
+### 2. Install Git LFS and download the database
+
+The database file `taxi.duckdb` (151 MB) is stored via Git LFS. Run:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+You should see `taxi.duckdb` appear in the project folder.
+
+### 3. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. Place data files
-
-Create a `data/` folder and copy your downloaded files into it:
-
-```
-nyc_taxi_explorer/
-├── data/
-│   ├── yellow_tripdata_2026-01.parquet
-│   ├── yellow_tripdata_2026-02.parquet
-│   └── taxi_zone_lookup.csv
-├── app.py
-├── setup_db.py
-├── queries.py
-├── requirements.txt
-└── README.md
-```
-
-### 3. Initialize the database (run ONCE)
-
-```bash
-python setup_db.py
-```
-
-This creates `taxi.duckdb` (~400 MB) from the Parquet files. You will see:
-```
-Creating database: taxi.duckdb
-Loading taxi_trips from Parquet files...
-  taxi_trips loaded: 7,124,755 rows
-Loading taxi_zones from CSV...
-  taxi_zones loaded: 265 rows
-Done. Database saved to: taxi.duckdb
 ```
 
 ### 4. Launch the dashboard
@@ -64,6 +53,9 @@ streamlit run app.py
 ```
 
 Open [http://localhost:8501](http://localhost:8501) in your browser.
+
+> **Alternatively, visit the live deployment (no setup required)**:  
+> 🔗 https://nyc-taxi-duckdb.streamlit.app
 
 ---
 
@@ -92,7 +84,7 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ## Database Schema
 
-### `taxi_trips` (7,124,755 rows)
+### `taxi_trips` (6,712,032 rows)
 | Column | Type | Description |
 |--------|------|-------------|
 | VendorID | INTEGER | Taxi vendor (1 or 2) |
@@ -130,11 +122,11 @@ DuckDB processes data in **chunks of 2,048 rows** (vectors) rather than one row 
 This enables SIMD CPU instructions and keeps data in L1/L2 cache.
 
 ### 2. Column Projection
-DuckDB reads only the columns needed by the query from Parquet storage.
+DuckDB reads only the columns needed by the query from storage.
 For a 20-column table where only 3 are needed, ~85% of I/O is eliminated.
 
 ### 3. Predicate Pushdown
-Filters are applied during the Parquet scan, before any joins or aggregations.
+Filters are applied during the scan phase, before any joins or aggregations.
 Row groups that don't match the predicate statistics are skipped entirely.
 
 ### 4. Build-Probe Hash Join
@@ -148,6 +140,20 @@ instead of a full sort — O(n log k) instead of O(n log n).
 
 ---
 
+## Repository Structure
+
+```
+nyc-taxi-duckdb/
+├── app.py              # Streamlit dashboard (main entry point)
+├── queries.py          # All 8 queries with internals documentation
+├── setup_db.py         # Database initialization script (for rebuilding from Parquet)
+├── requirements.txt    # Python dependencies
+├── taxi.duckdb         # DuckDB database file (151 MB, stored via Git LFS)
+└── README.md
+```
+
+---
+
 ## Data Source
 
 - **NYC TLC Yellow Taxi Trip Records**: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
@@ -158,7 +164,8 @@ instead of a full sort — O(n log k) instead of O(n log n).
 
 ## References
 
-1. Raasveldt, M. and Mühleisen, H. "DuckDB: an Embeddable Analytical Database." SIGMOD 2019.
+1. Raasveldt, M. and Mühleisen, H. "DuckDB: an Embeddable Analytical Database." SIGMOD 2019. https://ir.cwi.nl/pub/28800/28800.pdf
 2. DuckDB Documentation: EXPLAIN ANALYZE / Profiling. https://duckdb.org/docs/stable/guides/meta/explain_analyze.html
 3. DuckDB Documentation: Internals Overview. https://duckdb.org/docs/stable/internals/overview.html
 4. NYC TLC Trip Record Data. https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+5. Zukowski, M. et al. "MonetDB/X100: Hyper-Pipelining Query Execution." CIDR 2005.
