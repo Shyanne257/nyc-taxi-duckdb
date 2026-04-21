@@ -21,7 +21,7 @@ from queries import QUERIES, QUERY_MAP, CATEGORIES
 @st.cache_resource
 def get_connection():
     """Create in-memory DuckDB and load data from Hugging Face parquet."""
-    con = duckdb.connect()  # 纯内存数据库，不需要文件
+    con = duckdb.connect() 
     
     with st.spinner("⏳ Loading data (~150MB, first load only)..."):
         con.execute("""
