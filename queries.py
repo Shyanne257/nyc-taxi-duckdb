@@ -17,49 +17,46 @@ Each entry in QUERIES is a dict with:
 
 QUERIES = [
 
-    # ── 1. Aggregation ─────────────────────────────────────────────────────────
+    # ── 1. Aggregation (pure aggregation, NO JOIN) ──────────────────────────────
     {
-        "id": "agg_borough_revenue",
-        "title": "Total Revenue by Borough",
+        "id": "agg_payment_revenue",
+        "title": "Revenue by Payment Type",
         "category": "Aggregation",
         "sql": """
 SELECT
-    z.borough,
-    COUNT(*)                        AS trip_count,
-    ROUND(SUM(t.total_amount), 2)   AS total_revenue,
-    ROUND(AVG(t.total_amount), 2)   AS avg_fare
-FROM taxi_trips t
-JOIN taxi_zones z ON t.pickup_location_id = z.location_id
-GROUP BY z.borough
+    payment_label,
+    COUNT(*)                          AS trip_count,
+    ROUND(SUM(total_amount), 2)       AS total_revenue,
+    ROUND(AVG(total_amount), 2)       AS avg_fare,
+    ROUND(AVG(tip_amount), 2)         AS avg_tip
+FROM taxi_trips
+GROUP BY payment_label
 ORDER BY total_revenue DESC
 """,
         "description": (
-            "Groups all 7 million trip records by pickup borough and computes "
-            "total revenue, trip count, and average fare. This is the core "
-            "aggregation operation: a full-table GROUP BY with SUM and COUNT "
-            "applied across every row in the dataset."
+            "Groups all 6.7 million trip records by payment type (Credit Card, Cash, etc.) "
+            "and computes total revenue, trip count, average fare, and average tip. "
+            "This is a pure aggregation query — no JOIN is needed because "
+            "payment_label is a pre-computed derived column stored directly in taxi_trips."
         ),
         "internals": (
-            "DuckDB executes this query using its **vectorized execution engine**. "
-            "Rather than processing one row at a time (tuple-at-a-time model), "
-            "DuckDB processes data in *chunks* of up to 2,048 values. "
-            "Only the columns `total_amount` and `pickup_location_id` are scanned "
-            "from storage — all other columns are skipped entirely. "
-            "The HashAggregate operator accumulates partial sums within each chunk, "
-            "then merges partial results at the end. The JOIN is resolved as a "
-            "hash join against the small 265-row `taxi_zones` table, which is "
-            "fully held in memory."
+            "DuckDB executes this as a single-pipeline: <b>SEQ_SCAN → HASH_GROUP_BY</b>. "
+            "No JOIN operator appears in the plan at all. "
+            "DuckDB scans only 3 of 20 columns: <code>payment_label</code>, "
+            "<code>total_amount</code>, and <code>tip_amount</code>. "
+            "The HashAggregate maintains 5 buckets (one per payment type) and "
+            "accumulates SUM and COUNT in a single pass over all 6.7M rows, "
+            "processing 2,048 values per vectorized chunk."
         ),
         "why_matters": (
-            "Processing 7M rows in chunks means the CPU can keep 2,048 values "
-            "of `total_amount` in L1/L2 cache simultaneously, enabling SIMD "
-            "(Single Instruction, Multiple Data) operations. This is why DuckDB "
-            "can aggregate millions of rows far faster than a row-oriented system "
-            "like MySQL, which would fetch every column of every row even if only "
-            "two columns are needed."
+            "This query demonstrates the purest form of DuckDB's columnar advantage: "
+            "scanning only 3 of 20 columns eliminates 85% of I/O with zero join overhead. "
+            "In MySQL, the engine would fetch all 20 columns of every row even though "
+            "17 are irrelevant. The entire aggregation completes in a single sequential "
+            "pass — no intermediate materialization, no sorting, no join."
         ),
         "chart_type": "bar",
-        "x_col": "borough",
+        "x_col": "payment_label",
         "y_col": "total_revenue",
     },
 
@@ -70,9 +67,9 @@ ORDER BY total_revenue DESC
         "sql": """
 SELECT
     pickup_hour,
-    COUNT(*)                      AS trip_count,
+    COUNT(*)                         AS trip_count,
     ROUND(AVG(trip_duration_min), 1) AS avg_duration_min,
-    ROUND(AVG(fare_amount), 2)    AS avg_fare
+    ROUND(AVG(fare_amount), 2)       AS avg_fare
 FROM taxi_trips
 GROUP BY pickup_hour
 ORDER BY pickup_hour
@@ -80,23 +77,24 @@ ORDER BY pickup_hour
         "description": (
             "Aggregates all trips by the hour they were picked up (0–23). "
             "Shows how demand, trip duration, and average fare vary throughout "
-            "the day — a classic time-series aggregation over a derived column."
+            "the day — a classic time-series aggregation over a derived column. "
+            "No JOIN is needed because pickup_hour is pre-computed at load time."
         ),
         "internals": (
-            "The column `pickup_hour` was pre-computed during table creation via "
-            "`EXTRACT(hour FROM pickup_datetime)` and stored as an INTEGER, "
+            "The column <code>pickup_hour</code> was pre-computed during table creation via "
+            "<code>EXTRACT(hour FROM pickup_datetime)</code> and stored as an INTEGER, "
             "so no timestamp parsing is needed at query time. "
-            "DuckDB's vectorized HashAggregate scans only `pickup_hour`, "
-            "`trip_duration_min`, and `fare_amount` — 3 columns out of 20. "
-            "The EXPLAIN ANALYZE plan shows a single **SEQ_SCAN → HASH_GROUP_BY** "
-            "pipeline with no intermediate materialization."
+            "DuckDB's vectorized HashAggregate scans only <code>pickup_hour</code>, "
+            "<code>trip_duration_min</code>, and <code>fare_amount</code> — 3 columns out of 20. "
+            "The EXPLAIN plan shows a single <b>SEQ_SCAN → HASH_GROUP_BY</b> "
+            "pipeline with no JOIN and no intermediate materialization."
         ),
         "why_matters": (
-            "Projection pushdown (scanning only 3 of 20 columns) reduces I/O "
-            "significantly when reading columnar Parquet storage. In a row-oriented "
-            "system, each row would be fetched in full even though 17 columns "
-            "are irrelevant. DuckDB's columnar format means irrelevant columns "
-            "are never read from disk."
+            "Pre-computing derived columns at load time (pickup_hour, trip_duration_min) "
+            "is a key design decision: it trades a one-time write cost for repeated "
+            "read speedups. Every time this query runs, DuckDB avoids re-parsing "
+            "6.7M timestamps. Combined with column projection (3 of 20 columns), "
+            "this query scans the minimum possible data for a time-series aggregation."
         ),
         "chart_type": "line",
         "x_col": "pickup_hour",
@@ -133,13 +131,13 @@ LIMIT 500
             "projection — the application only needs a narrow slice of the data."
         ),
         "internals": (
-            "DuckDB applies the filter predicate (`trip_distance > 10`) *during* "
-            "the vectorized scan — each chunk of 2,048 `trip_distance` values is "
+            "DuckDB applies the filter predicate (<code>trip_distance > 10</code>) <i>during</i> "
+            "the vectorized scan — each chunk of 2,048 <code>trip_distance</code> values is "
             "evaluated with a SIMD comparison, producing a selection vector that "
             "marks which rows pass. Only rows that pass are forwarded to the JOIN "
             "operators. The projection ensures that only 7 of 20 columns are "
             "materialized in memory for output. The EXPLAIN plan shows: "
-            "**PARQUET_SCAN → FILTER → HASH_JOIN × 2 → PROJECTION → TOP_N**."
+            "<b>SEQ_SCAN → FILTER → HASH_JOIN × 2 → PROJECTION → TOP_N</b>."
         ),
         "why_matters": (
             "Late materialization: DuckDB delays constructing full output rows "
@@ -175,9 +173,9 @@ GROUP BY payment_label
             "inline during aggregation."
         ),
         "internals": (
-            "The filter on `payment_label` is applied as a vectorized predicate "
+            "The filter on <code>payment_label</code> is applied as a vectorized predicate "
             "during the SEQ_SCAN phase. The expression "
-            "`tip_amount / NULLIF(fare_amount, 0)` is evaluated as a vectorized "
+            "<code>tip_amount / NULLIF(fare_amount, 0)</code> is evaluated as a vectorized "
             "arithmetic operation across each chunk — DuckDB computes divisions "
             "for all 2,048 values in a chunk simultaneously before passing results "
             "to the HashAggregate. NULLIF is handled with a selection mask, not "
@@ -186,7 +184,7 @@ GROUP BY payment_label
         "why_matters": (
             "Inline expression evaluation during scanning (rather than in a "
             "separate pass) reduces memory pressure. DuckDB never materializes "
-            "a full intermediate column for `tip_amount / fare_amount` — the "
+            "a full intermediate column for <code>tip_amount / fare_amount</code> — the "
             "division is fused into the aggregation pipeline."
         ),
         "chart_type": "bar",
@@ -218,12 +216,12 @@ LIMIT 20
             "GROUP BY over the full dataset, then sort and truncate."
         ),
         "internals": (
-            "DuckDB uses a **TOP_N operator** for this query rather than a full "
+            "DuckDB uses a <b>TOP_N operator</b> for this query rather than a full "
             "sort. Instead of sorting all 265 group results, it maintains a "
             "bounded priority queue of size 20 during aggregation. This means "
             "only 20 entries are kept in memory at any time, regardless of how "
             "many groups exist. The physical plan shows: "
-            "**SEQ_SCAN → HASH_JOIN → HASH_GROUP_BY → TOP_N(20)**."
+            "<b>SEQ_SCAN → HASH_JOIN → HASH_GROUP_BY → TOP_N(20)</b>."
         ),
         "why_matters": (
             "The TOP_N optimization avoids a full O(n log n) sort when only the "
@@ -258,15 +256,15 @@ LIMIT 10
             "taxi earnings peak across the two-month window."
         ),
         "internals": (
-            "This is a two-column GROUP BY (`pickup_month`, `pickup_hour`) "
+            "This is a two-column GROUP BY (<code>pickup_month</code>, <code>pickup_hour</code>) "
             "producing 48 groups (2 months × 24 hours). DuckDB's HashAggregate "
             "builds a hash table with 48 buckets and accumulates SUM and COUNT "
-            "in a single pass over all 7M rows. Only `pickup_month`, `pickup_hour`, "
-            "and `total_amount` are scanned (3 of 20 columns). "
+            "in a single pass over all 6.7M rows. Only <code>pickup_month</code>, <code>pickup_hour</code>, "
+            "and <code>total_amount</code> are scanned (3 of 20 columns). "
             "The TOP_N(10) is applied after aggregation on 48 rows — trivial cost."
         ),
         "why_matters": (
-            "A single sequential pass over 7M rows with vectorized hash "
+            "A single sequential pass over 6.7M rows with vectorized hash "
             "aggregation is fundamentally more efficient than the equivalent "
             "in a row-store, which would require reading and discarding 17 "
             "irrelevant columns per row. The columnar scan + vectorized hashing "
@@ -299,20 +297,22 @@ GROUP BY z.borough, z.service_zone
 ORDER BY trip_count DESC
 """,
         "description": (
-            "Joins 7M trip records with the 265-row zone dimension table to "
+            "Joins 6.7M trip records with the 265-row zone dimension table to "
             "enrich trips with borough and service_zone labels, then computes "
             "8 aggregate metrics per borough. This is the most complex query: "
-            "a fact-table + dimension-table join followed by multi-metric aggregation."
+            "a fact-table JOIN with a dimension table followed by multi-metric aggregation. "
+            "Unlike the pure Aggregation queries, the borough label is NOT stored "
+            "in taxi_trips — it must be looked up via JOIN."
         ),
         "internals": (
-            "DuckDB uses a **build-probe hash join** strategy here. The smaller "
-            "`taxi_zones` table (265 rows) is used as the *build side*: it is "
-            "fully loaded into a hash table in memory. The larger `taxi_trips` "
-            "table (7M rows) is then streamed through as the *probe side*, with "
-            "each chunk of 2,048 `pickup_location_id` values hashed against the "
-            "in-memory table. This is called a *broadcast hash join* and avoids "
+            "DuckDB uses a <b>build-probe hash join</b> strategy here. The smaller "
+            "<code>taxi_zones</code> table (265 rows) is used as the <i>build side</i>: it is "
+            "fully loaded into a hash table in memory. The larger <code>taxi_trips</code> "
+            "table (6.7M rows) is then streamed through as the <i>probe side</i>, with "
+            "each chunk of 2,048 <code>pickup_location_id</code> values hashed against the "
+            "in-memory table. This is called a <i>broadcast hash join</i> and avoids "
             "any disk-based shuffle. The physical plan shows: "
-            "**SEQ_SCAN(taxi_trips) → HASH_JOIN [build: taxi_zones] → HASH_GROUP_BY → PROJECTION**."
+            "<b>SEQ_SCAN(taxi_trips) → HASH_JOIN [build: taxi_zones] → HASH_GROUP_BY → PROJECTION</b>."
         ),
         "why_matters": (
             "The asymmetric join strategy (small build side, large probe side) "
@@ -353,24 +353,25 @@ LIMIT 25
             "Identifies the 25 pickup zones where credit-card passengers tip the "
             "most on average. Uses a HAVING clause to exclude low-volume zones, "
             "a conditional SUM for tip rate, and a filter on payment type — "
-            "combining join, filter, aggregation, and Top-K in one query."
+            "combining join, filter, aggregation, and Top-K in one query. "
+            "The zone name must be looked up via JOIN — it does not exist in taxi_trips."
         ),
         "internals": (
-            "This query demonstrates DuckDB's **predicate pushdown**: the filter "
-            "`payment_label = 'Credit Card'` is applied during the Parquet scan, "
+            "This query demonstrates DuckDB's <b>predicate pushdown</b>: the filter "
+            "<code>payment_label = 'Credit Card'</code> is applied during the scan, "
             "before the join. This means the hash join only receives matching rows, "
             "roughly halving the probe-side volume. The conditional expression "
-            "`CASE WHEN tip_amount > 0 THEN 1 ELSE 0 END` is evaluated as a "
+            "<code>CASE WHEN tip_amount > 0 THEN 1 ELSE 0 END</code> is evaluated as a "
             "vectorized selection mask — no branch prediction overhead per row. "
             "The HAVING filter is applied after aggregation on the small group "
-            "result set (265 zones), not on the raw 7M rows."
+            "result set (265 zones), not on the raw 6.7M rows."
         ),
         "why_matters": (
             "Predicate pushdown is one of DuckDB's most impactful optimizations: "
             "by filtering rows as early as possible in the pipeline (at scan time), "
             "all downstream operators receive fewer rows. This is especially "
-            "valuable when reading Parquet files, because entire row groups can "
-            "be skipped based on column statistics without reading any data."
+            "valuable when reading columnar storage, because entire column chunks "
+            "can be skipped based on statistics without reading any data."
         ),
         "chart_type": "bar",
         "x_col": "zone",
