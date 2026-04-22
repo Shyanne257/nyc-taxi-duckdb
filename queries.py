@@ -30,6 +30,7 @@ SELECT
     ROUND(AVG(total_amount), 2)       AS avg_fare,
     ROUND(AVG(tip_amount), 2)         AS avg_tip
 FROM taxi_trips
+WHERE payment_label != 'Unknown'
 GROUP BY payment_label
 ORDER BY total_revenue DESC
 """,
